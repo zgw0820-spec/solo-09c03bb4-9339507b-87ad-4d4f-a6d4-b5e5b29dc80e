@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""测试专用：模拟 iproute2 `ip` 命令，并可故意制造「陈旧读取」窗口。
+
+只实现网关 RouteManager 用到的三种调用：
+  ip -j -4 route get <target>
+  ip -4 route replace <target>/32 via <nh>
+  ip -4 route del <target>/32
+
+状态写在 FAKE_IP_STATE 指向的 JSON 文件里。
+FAKE_IP_GET_DELAY：route get 先读出当前值，再 sleep，再返回读到的（陈旧）值，
+                   用来确定性地放大「API 在锁外读下一跳、看门狗期间回退」的竞态。
+"""
+import json
+import os
+import sys
+import time
+
+STATE = os.environ["FAKE_IP_STATE"]
+GET_DELAY = float(os.environ.get("FAKE_IP_GET_DELAY", "0"))
+REPLACE_DELAY = float(os.environ.get("FAKE_IP_REPLACE_DELAY", "0"))
+
+
+def load():
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"nexthop": None}
+
+
+def save(st):
+    tmp = STATE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(st, f)
+    os.replace(tmp, STATE)
+
+
+def main(argv):
+    # 形如: -j -4 route get 172.30.0.100
+    if "route" in argv and "get" in argv:
+        st = load()
+        nh = st.get("nexthop")  # 先读
+        if GET_DELAY:
+            time.sleep(GET_DELAY)  # 期间看门狗可能已经把路由恢复
+        if nh:
+            print(json.dumps([{"dst": "172.30.0.100", "gateway": nh,
+                               "dev": "eth0", "uid": 0}]))
+        else:
+            print(json.dumps([{"dst": "172.30.0.100", "dev": "eth0"}]))
+        return 0
+
+    if "route" in argv and "replace" in argv:
+        if REPLACE_DELAY:
+            time.sleep(REPLACE_DELAY)
+        via = argv[argv.index("via") + 1] if "via" in argv else None
+        st = load()
+        st["nexthop"] = via
+        save(st)
+        return 0
+
+    if "route" in argv and "del" in argv:
+        st = load()
+        st["nexthop"] = None
+        save(st)
+        return 0
+
+    sys.stderr.write(f"fake ip: unsupported args: {argv}\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
