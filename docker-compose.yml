@@ -1,0 +1,74 @@
+name: route-trialsw
+
+# 隔离演示环境：
+#   gateway   采集网关（FastAPI 管理 API + 独立看门狗，持有 NET_ADMIN，实际改路由）
+#   collector 采集端（172.30.0.100:9000，被探测目标）
+#   nh-*      预置下一跳；backup-good 开转发，backup-broken 关转发（用于演示回退）
+networks:
+  fieldnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+services:
+  gateway:
+    build: ./gateway
+    container_name: tsw-gateway
+    environment:
+      TARGET_IP: 172.30.0.100       # 采集端地址（entrypoint 装初始主机路由用）
+      PRIMARY_NEXTHOP: 172.30.0.11  # 主用下一跳
+    cap_add:
+      - NET_ADMIN                   # 改路由所需的最小特权
+    sysctls:
+      - net.ipv4.conf.all.accept_redirects=0      # 不收 ICMP 重定向，路由以试切管理为准
+      - net.ipv4.conf.default.accept_redirects=0
+    ports:
+      - "8080:8000"                 # Swagger: http://localhost:8080/docs
+    networks:
+      fieldnet:
+        ipv4_address: 172.30.0.10
+
+  collector:
+    image: python:3.11-slim
+    container_name: tsw-collector
+    command: ["python3", "-m", "http.server", "9000", "--bind", "0.0.0.0"]
+    networks:
+      fieldnet:
+        ipv4_address: 172.30.0.100
+
+  nh-primary:
+    image: alpine:3.20
+    container_name: tsw-nh-primary
+    command: ["tail", "-f", "/dev/null"]
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.send_redirects=0
+      - net.ipv4.conf.default.send_redirects=0
+    networks:
+      fieldnet:
+        ipv4_address: 172.30.0.11
+
+  nh-backup-good:
+    image: alpine:3.20
+    container_name: tsw-nh-backup-good
+    command: ["tail", "-f", "/dev/null"]
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.send_redirects=0
+      - net.ipv4.conf.default.send_redirects=0
+    networks:
+      fieldnet:
+        ipv4_address: 172.30.0.12
+
+  nh-backup-broken:
+    image: alpine:3.20
+    container_name: tsw-nh-backup-broken
+    command: ["tail", "-f", "/dev/null"]
+    sysctls:
+      - net.ipv4.ip_forward=0       # 不转发：探测必然失败，用于演示回退
+      - net.ipv4.conf.all.send_redirects=0
+      - net.ipv4.conf.default.send_redirects=0
+    networks:
+      fieldnet:
+        ipv4_address: 172.30.0.13

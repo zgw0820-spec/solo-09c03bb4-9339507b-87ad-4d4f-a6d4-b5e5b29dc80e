@@ -1,0 +1,12 @@
+# 采集端（被试切路由 / 探测的目标）
+target: 172.30.0.100
+probe_port: 9000          # 采集端 TCP 探测端口
+probe_attempts: 3         # 单次确认最多探测次数
+probe_timeout_sec: 1.5    # 每次 TCP 连接超时
+probe_interval_sec: 0.3   # 重试间隔
+
+# 预置下一跳（值班员只能按名称从中选择）
+nexthops:
+  primary: 172.30.0.11        # 主用下一跳（容器启动时初始路由指向它）
+  backup-good: 172.30.0.12    # 备用下一跳：正常转发 -> 确认可成功，演示“保留”
+  backup-broken: 172.30.0.13  # 备用下一跳：不转发   -> 探测失败，演示“回退”
